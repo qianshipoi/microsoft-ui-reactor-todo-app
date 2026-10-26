@@ -17,3 +17,10 @@ artifacts/
 # Test / verification output
 TestResults/
 *.binlog
+
+# Local dotnet tools (LottieGen)
+.tools/
+
+# Scratch captures from tools/measure-icon-ink.ps1
+.ink/
+

@@ -189,18 +189,42 @@ function Get-DialogButton($dialog, [string]$name) {
     return @(Find-Elements $dialog $CT::Button | Where-Object { $_.Current.Name -eq $name })[0]
 }
 
-# Pick a value in one of the two settings ComboBoxes (0 = theme, 1 = language).
-function Select-ComboIndex($root, [int]$comboIndex, [int]$itemIndex) {
-    $combos = Find-Elements $root $CT::ComboBox
-    if ($combos.Count -le $comboIndex) { throw "combo $comboIndex not found" }
-    $combo = $combos[$comboIndex]
-    $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    Start-Sleep -Milliseconds 600
-    $items = Find-Elements $combo $CT::ListItem
-    if ($items.Count -le $itemIndex) { throw "combo item $itemIndex not found" }
-    # Selecting closes the drop-down by itself; collapsing afterwards makes WinUI report -1.
-    $items[$itemIndex].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+# Settings live behind two icon buttons in the title bar; their automation ids are stable
+# across languages, and the flyout items are ordered: theme = system/light/dark,
+# language = system/中文/English/日本語.
+function Find-SettingsButton($root, [string]$automationId) {
+    return @(Find-Elements $root $CT::Button | Where-Object { $_.Current.AutomationId -eq $automationId })[0]
+}
+
+function Open-SettingsMenu($root, [string]$automationId) {
+    $button = Find-SettingsButton $root $automationId
+    if (-not $button) { throw "settings button '$automationId' not found" }
+    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Start-Sleep -Milliseconds 900
+    return $button
+}
+
+function Click-SettingsButton($root, [string]$automationId) {
+    # The screen remounts on every theme change, so always re-resolve the control first.
+    $button = Find-SettingsButton $root $automationId
+    if (-not $button) { throw "settings button '$automationId' not found" }
+    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 1400
+}
+
+function Select-SettingsItem($root, [int]$index) {
+    $items = Find-Elements $root $CT::MenuItem
+    if ($items.Count -le $index) { throw "menu item $index not found ($($items.Count) items)" }
+    # WinUI RadioMenuFlyoutItem exposes TogglePattern.
+    $items[$index].GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Start-Sleep -Milliseconds 1100
+}
+
+function Test-SettingsItemChecked($root, [int]$index) {
+    $items = Find-Elements $root $CT::MenuItem
+    if ($items.Count -le $index) { return $false }
+    return $items[$index].GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq `
+        [System.Windows.Automation.ToggleState]::On
 }
 
 function Invoke-Element($element) {
@@ -436,32 +460,45 @@ try {
 
     # ---- 11. language + theme switching ----
     Write-Host "`n[11] language and theme" -ForegroundColor Yellow
-    $combos = Find-Elements $window $CT::ComboBox
-    Assert-That ($combos.Count -eq 2) "two settings pickers are present (theme, language)"
+    $themeButton = Find-SettingsButton $window 'ThemeButton'
+    $languageButton = Find-SettingsButton $window 'LanguageButton'
+    Assert-That ($null -ne $themeButton -and $null -ne $languageButton) 'two settings icon buttons are present'
 
-    if ($combos.Count -eq 2) {
-        # language -> English (index 2 in the picker: system, 中文, English, 日本語)
-        Select-ComboIndex $window 1 2
-        $buttons = @(Find-Elements $window $CT::Button | ForEach-Object { $_.Current.Name })
-        $texts = @(Find-Elements $window $CT::Text | ForEach-Object { $_.Current.Name })
-        Assert-That ($buttons -contains 'Add' -and $buttons -contains 'Delete') 'switching to English relabels the UI'
-        Assert-That ($texts -contains 'Todo list') 'the heading follows the language'
+    if ($themeButton -and $languageButton) {
+        $windowTop = $window.Current.BoundingRectangle.Y
+        $windowLeft = $window.Current.BoundingRectangle.X
+        $windowWidth = $window.Current.BoundingRectangle.Width
+        $themeRect = $themeButton.Current.BoundingRectangle
+        Assert-That (($themeRect.Y - $windowTop) -gt 60) 'they sit in the page content, not in the window frame'
+        Assert-That (($themeRect.X - $windowLeft) -gt ($windowWidth / 2)) 'they sit in the top-right corner of the page'
+        Assert-That ($themeRect.Width -lt 60) 'they are icon-only (no text label)'
 
-        # back to Chinese
-        Select-ComboIndex $window 1 1
+        # theme button cycles follow-system -> light -> dark -> follow-system, with no flyout
+        Click-SettingsButton $window 'ThemeButton'
+        Assert-That (@(Find-Elements $window $CT::MenuItem).Count -eq 0) 'the theme button opens no flyout'
+        $savedSettings = if (Test-Path $settingsFile) { Get-Content $settingsFile -Raw } else { '' }
+        Assert-That ($savedSettings -match '"theme":\s*"Light"') 'click 1 of the theme button -> Light'
+
+        Click-SettingsButton $window 'ThemeButton'
+        $savedSettings = if (Test-Path $settingsFile) { Get-Content $settingsFile -Raw } else { '' }
+        Assert-That ($savedSettings -match '"theme":\s*"Dark"') 'click 2 -> Dark'
+
+        Click-SettingsButton $window 'ThemeButton'
+        $savedSettings = if (Test-Path $settingsFile) { Get-Content $settingsFile -Raw } else { '' }
+        Assert-That ($savedSettings -match '"theme":\s*"System"') 'click 3 -> follow system'
+
+        # language flyout: system / 中文 / English / 日本語
+        [void](Open-SettingsMenu $window 'LanguageButton')
+        $languageMenu = Find-Elements $window $CT::MenuItem
+        Assert-That ($languageMenu.Count -eq 4) "the language flyout lists four choices ($($languageMenu.Count))"
+
+        Select-SettingsItem $window 2   # English
+        Assert-That (@(Find-Elements $window $CT::Button | ForEach-Object { $_.Current.Name }) -contains 'Add') 'switching to English relabels the UI'
+        [void](Open-SettingsMenu $window 'LanguageButton')
+        Assert-That (Test-SettingsItemChecked $window 2) 'the check-mark is on English'
+
+        Select-SettingsItem $window 1   # 简体中文
         Assert-That (@(Find-Elements $window $CT::Text | ForEach-Object { $_.Current.Name }) -contains '待办清单') 'switching back restores Chinese'
-
-        # theme -> Dark, verified through the persisted setting (colors are not exposed by UIA)
-        Select-ComboIndex $window 0 2
-        Start-Sleep -Milliseconds 500
-        $savedSettings = if (Test-Path $settingsFile) { Get-Content $settingsFile -Raw } else { '' }
-        Assert-That ($savedSettings -match '"theme":\s*"Dark"') 'choosing 深色 persists theme=Dark'
-
-        # theme -> follow system
-        Select-ComboIndex $window 0 0
-        Start-Sleep -Milliseconds 500
-        $savedSettings = if (Test-Path $settingsFile) { Get-Content $settingsFile -Raw } else { '' }
-        Assert-That ($savedSettings -match '"theme":\s*"System"') 'choosing 跟随系统 persists theme=System'
     }
 }
 finally {
@@ -479,6 +516,9 @@ if ($script:failures -eq 0) {
 }
 Write-Host "RESULT: $($script:failures) of $($script:checks) checks failed" -ForegroundColor Red
 exit 1
+
+
+
 
 
 

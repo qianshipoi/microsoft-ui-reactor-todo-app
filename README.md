@@ -15,7 +15,9 @@ Reactor 是微软实验性的 **声明式、组件化 C# UI 框架**：渲染出
 - 过滤器：全部 / 未完成 / 已完成，各自带实时计数
 - 底部汇总「N 项未完成 · M 项已完成」，空列表有占位提示
 - **多语言**：简体中文 / English / 日本語 / 跟随系统，切换即时生效（含窗口标题与无障碍名称）
-- **主题**：浅色 / 深色 / 跟随系统，切换即时生效
+- **设置入口**：页面右上角两个图标按钮（主题、语言）。主题是三态循环，**点一下换一个**（跟随系统 → 日间 → 夜间 → 跟随系统），图标会随当前模式变化：跟随系统 = 显示器 `\uE7F4`、日间 = 太阳 `\uE706`、夜间 = 月亮 `\uE708`；语言点开是带勾选的菜单气泡（地球 `\uE774`）。字体用系统自带的 `Segoe MDL2 Assets`（Win10 也有，`Segoe Fluent Icons` 只在 Win11）
+- **主题**：浅色 / 深色 / 跟随系统，切换即时生效；「跟随系统」跟随的是系统的**深浅色**，系统切主题时应用自动跟随（不取系统的自定义强调色）
+- **图标过渡**：日间↔夜间切换用 **Lottie 动画**（太阳↔月亮形变，517ms）播放；跟随系统用显示器字形
 - 自动持久化：待办写入 `todos.json`，主题与语言写入 `settings.json`，重启后都恢复
 - 按钮按语义分色：主操作实心强调色、普通操作默认样式、轻量操作无边框、危险操作系统红
 
@@ -193,11 +195,42 @@ Caption(intl.T(StringKeys.Summary, ("remaining", n), ("completed", m)));
   且 `Theme.*` 画刷是**元素创建时**解析的。所以做法是——直接在控件上写 `RequestedTheme`，
   并在主题变化时用 `.WithKey($"theme-{theme}")` 让整棵子树重建。
 - **背景必须自己铺**：`BackdropKind.Mica` 跟随的是**系统**主题，不会跟着应用内的 `RequestedTheme` 走。
-  只切内容主题会出现「白底 + 白字」。所以显式选了浅色/深色时，根元素额外铺一层
-  `Theme.SolidBackground`（实测深色下为 `#FF202020`、文字 `#FFFFFFFF`；浅色下 `#FFF3F3F3` + `#E4000000`），
-  只有「跟随系统」时才让 Mica 透出来。
-- 标题栏的最小化/最大化/关闭按钮由系统绘制、跟随应用主题（WinUI 不支持运行时改），所以显式主题时
-  通过 `AppWindow.TitleBar` 把这几颗按钮的前景/悬停色改成匹配主题的颜色；切回「跟随系统」时置回默认。
+  只切内容主题会出现「白底 + 白字」。所以现在**始终**在根元素铺一层 `Theme.SolidBackground`
+  （实测深色下为 `#FF202020`、文字 `#FFFFFFFF`；浅色下 `#FFF3F3F3` + `#E4000000`），不再依赖 Mica。
+- **「跟随系统」= 跟随深浅色**：启动时用 `UISettings.GetColorValue(UIColorType.Background)` 判断系统是深还是浅，
+  再订阅 `UISettings.ColorValuesChanged`（回调在后台线程，需 `DispatcherQueue.TryEnqueue` 回到 UI 线程）
+  解析成具体的 Light / Dark 再套用。这样既不会取系统的自定义强调色，系统切主题时应用也会自动跟随。
+- **为什么不用 `AnimatedIcon`**：WinUI 的 `AnimatedIcon` 必须提供一个 `IAnimatedVisualSource`（Lottie 动画）。
+  系统自带的动画面板只有设置/查找/返回/汉堡/箭头等，没有太阳/月亮/显示器这类主题图标；自绘 Lottie 再跑 LottieGen
+  成本过高，所以改用 WinUI 原生 Storyboard：在 `.OnMount` 里给图标播放 140ms 的淡入。
+- **日间/夜间用 Lottie 动画**：`Assets/lottie/sun-moon.json`（Lottie 5.6.9，500×500，60fps，31 帧，517ms，
+  **MIT © Samuel Osborne**，见 `THIRD-PARTY-NOTICES.md`）用 **LottieGen** 编译成 C#
+  `IAnimatedVisualSource`（`src/TodoApp/Animations/Sun_moon.cs`，46KB），再用 `AnimatedVisualPlayer` 播放：
+  日间冻结在第 0 帧（太阳）、夜间冻结在第 1 帧（月亮），切换时 `PlayAsync(from, to)` 播放形变。
+  「跟随系统」仍用显示器字形，因为这个素材只覆盖太阳↔月亮。
+  素材自带颜色（单色黑），所以生成时加了 **`-GenerateColorBindings`**，LottieGen 会暴露两个可改的颜色属性：
+  `Color_000000`（图形本体）。夜间换成白色、白天换成近黑，保证两种主题下都清晰。
+  **颜色必须在把 source 交给 `AnimatedVisualPlayer.Source` 之前设置**——动画视觉是从 source 构建的。
+  实测：`IsAnimatedVisualLoaded=True`、`Duration=517ms`、切换时 `played from=0 to=1 error=none`；
+  反射读回 source 的颜色：浅色 `fg=#E5000000 / bg=#00FFFFFF`、深色 `fg=#FFFFFFFF / bg=#FF202020`。
+- **三段式用一个素材**：市面没有现成的三态 Lottie（主流都是太阳↔月亮），所以按
+  [motion-design](https://skills.sh/lottiefiles/motion-design-skill/motion-design) 与
+  [text-to-lottie](https://skills.sh/diffusionstudio/lottie/text-to-lottie) 两个 Agent Skill 的规范
+  **自己生成**了 `Assets/lottie/theme-3state.json`（生成脚本 [`tools/gen-theme-lottie.mjs`](tools/gen-theme-lottie.mjs)）：
+  - 时间线 fr 60、帧 0–45（750 ms，每条腿 250 ms），**三段顺序正向**：`0→1/3` 系统→日间、`1/3→2/3` 日间→夜间、`2/3→1` 夜间→系统（`PlayAsync` 不支持倒放，只能正向排布）
+  - Corporate 人格：`cubic-bezier(0.2, 0, 0, 1)`；切换是**左升右落**的日出/日落轨迹——新图标从左下沿弧线升到中心，旧图标从中心落到右下淡出，出入错峰 9 帧避免重叠；
+    环境动效主动省略（20px 控件加了只会变噪音）
+  - 结构遵守 text-to-lottie 的规则：顶层 `v/fr/ip/op/w/h/nm/assets/layers`、`op` 独占、
+    **一个形状一个组**（同一组放多个形状会触发 LottieGen `LT0027` 并丢形状）、`markers` 标注三态
+  - 生成脚本自带不变量自检：frame 0/15/30/45 的三层可见性、当前态必须居中、雨出方向必须左→右、出入错峰、弯月 `max x < 15`（整圆会到 21）
+  - 右侧两个图标按钮按下缩到 0.92、松开回 1.0（合成器 `Visual.Scale`，不用 RenderTransform 以免字形发糊）
+  - 图标视觉尺寸与旁边字体图标对齐：统一 20×20 图标盒 + 画布内图形放大 145% + 描边 7 单位（实测两侧墨迹 17×16 vs 16×16），见 [`docs/motion-spec.md`](docs/motion-spec.md) 第 8 节
+  - 动效决策与两个已修复 bug 的说明见 [`docs/motion-spec.md`](docs/motion-spec.md)
+  实测日志：三条腿全部正向播放，`error=none`；夜间→系统播到进度 1（第 45 帧 = 显示器）
+- **为什么不是字体缩放淡入**：`ScaleTransform` 会让字形按 0.6→1 的分数比例重新栅格化，必然发糊——这也是换成
+  Lottie 的直接原因（矢量动画在合成器里缩放不会出现字体那种重采样）。
+- 标题栏的最小化/最大化/关闭按钮由系统绘制、跟随**应用**主题（WinUI 不支持运行时改），所以按解析后的主题
+  通过 `AppWindow.TitleBar` 显式设置这几颗按钮的前景/悬停/按下色，避免出现「深色内容 + 系统绿色按钮」这种混搭。
 
 ## 代码导读：React 心智模型 → Reactor 写法
 
@@ -219,7 +252,7 @@ Caption(intl.T(StringKeys.Summary, ("remaining", n), ("completed", m)));
 - **行内状态归属行自己**：「是否处于编辑态」「正在编辑的草稿」放在 `TodoRow` 内部，父组件完全不需要知道；因为行带 key，插入/删除时编辑态会跟着对应的待办走。
 - **点文字也能切换完成**：标题外再包一层透明 `Border` 作为命中区——`TextBlock` 只在字形上响应指针，加透明背景后整列都可点；同时补 `.IsTabStop(true)` 与 Enter/Space 处理，键盘和读屏用户也能触发（Reactor 分析器 `REACTOR_A11Y_004` 会强制这一点）。编辑态不挂这个处理，否则点输入框就会误切换。
 - **持久化**：启动时 `TodoState.Initial` 同步读盘，之后每次列表变化由 `UseEffect` 写盘；JSON 用 `JsonSerializerContext` 源生成，避免裁剪告警。
-- **主题**：全部颜色走 `Theme.*` 语义 token（`Theme.CardBackground`、`Theme.SecondaryText`、`Theme.SystemSuccess` 等），窗口底色用 `Backdrop(BackdropKind.Mica)`，因此明暗主题自动适配。
+- **主题**：全部颜色走 `Theme.*` 语义 token（`Theme.CardBackground`、`Theme.SecondaryText`、`Theme.SystemSuccess` 等），窗口底色用 `Theme.SolidBackground` 自铺，因此明暗主题自动适配。
 
 ## 实测踩坑记录
 
@@ -239,7 +272,17 @@ Caption(intl.T(StringKeys.Summary, ("remaining", n), ("completed", m)));
 12. **`.Foreground()` 会让按钮丢失圆角**：加前景色后 `Button.CornerRadius` 从 `4,4,4,4` 变成 `0,0,0,0`（样式被切成显式 `Button`，而它不设圆角）。要保留系统观感就显式补 `.CornerRadius(ThemeResource.CornerRadius("ControlCornerRadius"))`。
 13. **`.RequestedTheme()` 加在组件 `Render()` 返回的根元素上不会被应用**（实测控件仍是 `Default`）。要在 `.Set(panel => panel.RequestedTheme = theme)` 里直接写属性。
 14. **`Theme.*` 画刷在元素创建时解析**，所以仅改主题不会让已建好的元素换色；主题变化时要让子树重建（本项目用 `.WithKey($"theme-{theme}")`）。
-15. **`ComboBox` 会回调 `SelectedIndexChanged(-1)`**（关闭下拉/反选时）。直接 `(ThemeMode)index` 会得到越界枚举并写进设置文件（`"theme": "-1"`）——要过滤 `index >= 0`，读取时再用 `Enum.IsDefined` 兜底。
+15. **`ComboBox` 会回调 `SelectedIndexChanged(-1)`**（关闭下拉/反选时）。直接 `(ThemeMode)index` 会得到越界枚举并写进设置文件（`"theme": "-1"`）——要过滤 `index >= 0`，读取时再用 `Enum.IsDefined` 兜底。（早期版本用 ComboBox 时踩到；现在换成图标按钮 + 菜单气泡。）
+18. **图标字体要挑系统真有的**：`Segoe Fluent Icons` 只有 Windows 11 自带，在 Windows 10 上写它会渲染成空白。跨版本请用 `Segoe MDL2 Assets`（Win10 起就有，`\uE706` 亮度、`\uE774` 地球都一样）。
+19. **`RadioMenuFlyoutItem` 在 UI Automation 里是 Toggle 模式**（不是 SelectionItem/Invoke），自动化测试要用 `TogglePattern.Toggle()` 选中、`ToggleState == On` 判断勾选。
+20. **`BackdropKind.Mica` 只跟系统主题走**：应用内切深色时它不会变，于是出现「白底白字」；而且它也不适合承载“跟随系统”的语义（Mica 会取系统材质/色调）。本项目改为始终自铺 `Theme.SolidBackground`。
+21. **主题变化会重挂载界面，缓存下来的 AutomationElement 会失效**：自动化测试里每次点击前都要重新查找控件，否则拿旧引用点击会落到已经销毁的控件上。
+22. **`.WithTransitions(...)` 在本版本没有落到控件上**（实测 `Button.Transitions.Count` 和 `Border.Transitions.Count` 都是 0），文档里的 `Transition.Fade` 也不能转换成 WinUI 的 `Transition` 类型。要真实的进入动画，用 `.OnMount(element => storyboard.Begin())` 自己播 Storyboard。
+23. **给单个子元素换 `.WithKey(...)` 不会重建控件**（UIA RuntimeId 不变）；要重挂载，key 得加在**组件**元素上（本项目把屏幕按所选模式 key）。
+24. **`Microsoft.Toolkit.Uwp.UI.Lottie`（Lottie-Windows 7.x）只面向 UAP**（nuspec 里是 `uap10.0.16299` + `Win2D.uwp`），WinUI 3 用不了。WinUI 3 的正确路径是 **LottieGen 生成源码**再编进项目。
+25. **LottieGen 必须显式指定 `-WinUIVersion 3.0`**：默认生成的是 `Windows.UI.Composition` 版本，`RootVisual` 类型不匹配，编译报 `CS0738`。加 `-WinUIVersion 3.0` 才会生成 `Microsoft.UI.Composition` 版本。
+26. **生成代码还需要 Win2D**：`Microsoft.Graphics.Canvas.Geometry` 来自 `Microsoft.Graphics.Win2D`，版本要 ≥ `1.4.0`（Reactor.Devtools 已传递引用 1.4.0，显式写 1.3.2 会触发 NU1605 降级错误）。
+27. **Lottie 的颜色是烘焙进素材的**：黑色图标在深色主题下必然看不清。生成时加 `-GenerateColorBindings`，用 `SetColorProperty("Color_000000", …)` 改色；调用顺序要在 `player.Source = …` **之前**，否则视觉已经构建完毕、改色无效。
 16. **`LocaleProvider` 不做语言回退**：未支持的 locale 会原样问 provider，回退逻辑得自己写在 `IStringResourceProvider.GetString` 里。
 17. **在根组件外面多包一层布局容器会切断高度链**：主题改造时我一度把整屏包进 `FlexColumn(content)`，结果窗口内容变成“内容高度”，`Flex(grow: 1)` 全部失效——列表只拿到 150px（正好装下 3 行），底部留出大片空白。正确做法是不包容器，改用 `.WithKey(theme)` 让组件重挂载来刷新主题。
 
@@ -254,7 +297,8 @@ Caption(intl.T(StringKeys.Summary, ("remaining", n), ("completed", m)));
 - 圆角（逐像素量描边起始位置）：危险按钮顶行描边从 x=3 开始、中部从 x=0 开始 → 半径 4 的圆角生效
 - 主题（读真实控件）：同一张待办卡片在浅色下解析 `#B3FFFFFF`、深色下 `#0DFFFFFF`；切换后重新加载的主题为 `actual=Dark`
 - 布局（UIA 几何）：列表视口 458px 高并占满中部，汇总/清除按钮距窗口底边 32px；20 条数据时 11 条被裁在滚动区内，滚动到 100% 后最后一条可见
-- 深色可读性（读真实画刷）：深色下根背景 `#FF202020` + 标题文字 `#FFFFFFFF`，浅色下 `#FFF3F3F3` + `#E4000000`，跟随系统时背景为 `null`（透出 Mica）
+- 图标动画（读控件属性）：`AnimatedVisualPlayer.IsAnimatedVisualLoaded=True`、`Duration=517ms`，Light→Dark 时 `played from=0 to=1 error=none`；Lottie 颜色随主题切换（反射读回：浅色 `#E5000000`/透明、深色 `#FFFFFFFF`/`#FF202020`）
+- 深色可读性（读真实画刷）：深色下根背景 `#FF202020` + 标题文字 `#FFFFFFFF`，浅色下 `#FFF3F3F3` + `#E4000000`；「跟随系统」在系统为浅色时解析为 `resolved=Light` + `#FFF3F3F3`
 - 语言（UIA 读控件名）：切到 English 后按钮变为 `Add / Edit / Delete`、标题变为 `Todo list`；切到日本語为 `追加 / 削除`、`やることリスト`
 
 项目自带一个端到端冒烟测试，用 UI Automation 驱动真实窗口（WinUI 没有无头宿主，只能跑真窗口）。
@@ -264,10 +308,10 @@ Caption(intl.T(StringKeys.Summary, ("remaining", n), ("completed", m)));
 pwsh -File .\tools\ui-smoke-test.ps1     # arm64: -Arch arm64
 ```
 
-覆盖 38 项检查：空列表启动、按钮新增、三个过滤器、行内重命名、行布局几何、
+覆盖 44 项检查：空列表启动、按钮新增、三个过滤器、行内重命名、行布局几何、
 删除/清除的二次确认（开框、取消、确认三条路径各自校验）、按钮禁用态、重启后数据恢复、
-点击标题切换完成状态（真鼠标点击）、键盘 Enter 新增、语言切换（中日英来回切）、主题切换与持久化、列表占满中部且页脚贴底。
-本机实测 **38/38 全部通过**。
+点击标题切换完成状态（真鼠标点击）、键盘 Enter 新增、语言切换（中日英来回切）、主题切换与持久化（图标按钮 + 菜单气泡）、列表占满中部且页脚贴底。
+本机实测 **44/44 全部通过**。
 
 > 键盘输入（Enter 提交）需要窗口真正拿到前台焦点。若 Windows 拒绝把前台交给后台进程，
 > 该项会明确输出 `[SKIP]` 而不是伪装成通过或失败 —— 其余 UIA 检查照常运行。
@@ -282,6 +326,24 @@ pwsh -File .\tools\ui-smoke-test.ps1     # arm64: -Arch arm64
 - 本项目由 `dotnet new reactor` 官方模板脚手架改造而来（模板包 `Microsoft.WindowsAppSDK.WinUI.CSharp.Templates`），并补了 `WindowsAppSDKSelfContained=true`，这样直接双击 exe 也能跑，不必先安装 Windows App Runtime。
 - Reactor 目前是**实验性预览**，API 可能随版本变化。包内自带一份面向 AI 助手的完整文档：`~/.nuget/packages/microsoft.ui.reactor/0.1.0-preview.16/agentkit/`（含 `reactor.api.txt` 全量 API 索引与 recipes），排查 API 时比翻网页快得多。
 - 官方仓库：<https://github.com/microsoft/microsoft-ui-reactor>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
