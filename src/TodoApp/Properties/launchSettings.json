@@ -1,0 +1,14 @@
+{
+  "profiles": {
+    "Reactor Todo (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Reactor Todo (Unpackaged)": {
+      "commandName": "Project"
+    },
+    "Reactor Todo (Unpackaged, Devtools)": {
+      "commandName": "Project",
+      "commandLineArgs": "--devtools"
+    }
+  }
+}

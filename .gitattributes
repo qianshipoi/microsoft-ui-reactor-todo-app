@@ -1,0 +1,17 @@
+# Normalize line endings: source is text, images stay binary.
+* text=auto eol=lf
+
+*.cs      text diff=csharp
+*.csproj  text
+*.slnx    text
+*.sln     text
+*.md      text
+*.ps1     text
+*.json    text
+*.xml     text
+*.manifest text
+*.appxmanifest text
+
+*.png     binary
+*.ico     binary
+*.pfx     binary
