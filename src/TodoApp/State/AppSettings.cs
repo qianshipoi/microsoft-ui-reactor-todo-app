@@ -68,13 +68,8 @@ public sealed record AppSettings(ThemeMode Theme, AppLanguage Language)
         }
     }
 
-    /// <summary>ElementTheme.Default means "follow the system" in WinUI.</summary>
-    public ElementTheme ToElementTheme() => Theme switch
-    {
-        ThemeMode.Light => ElementTheme.Light,
-        ThemeMode.Dark => ElementTheme.Dark,
-        _ => ElementTheme.Default,
-    };
+    /// <summary>The theme that should actually be applied (System is resolved upstream).</summary>
+    public ElementTheme ToElementTheme() => Theme.ToElementTheme();
 
     public static AppSettings Reduce(AppSettings settings, AppSettingsAction action) => action switch
     {
@@ -90,4 +85,15 @@ public sealed class AppSettingsCommands(Action<AppSettingsAction> dispatch)
     public void SetTheme(ThemeMode mode) => dispatch(new SetThemeMode(mode));
 
     public void SetLanguage(AppLanguage language) => dispatch(new SetLanguage(language));
+}
+/// <summary>Maps a theme mode onto WinUI's element theme.</summary>
+public static class ThemeModeExtensions
+{
+    /// <summary>ElementTheme.Default means "inherit from the system" in WinUI.</summary>
+    public static ElementTheme ToElementTheme(this ThemeMode mode) => mode switch
+    {
+        ThemeMode.Light => ElementTheme.Light,
+        ThemeMode.Dark => ElementTheme.Dark,
+        _ => ElementTheme.Default,
+    };
 }

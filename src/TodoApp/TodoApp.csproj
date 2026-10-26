@@ -59,6 +59,7 @@
     -->
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="*" />
     <PackageReference Include="Microsoft.UI.Reactor" Version="0.1.0-preview.16" />
+    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
   </ItemGroup>
 
   <!--
